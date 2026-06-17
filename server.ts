@@ -27,6 +27,34 @@ const ai = new GoogleGenAI({
   },
 });
 
+// Helper to call generateContent with automatic model fallback (e.g., on 429 quota limits or server errors)
+async function generateWithFallback(params: {
+  contents: any;
+  config?: any;
+  model: string;
+}, fallbackModels: string[] = []): Promise<any> {
+  const models = [params.model, ...fallbackModels];
+  let lastError: any = null;
+
+  for (const model of models) {
+    try {
+      console.log(`[Gemini SDK] Attempting generation with model: ${model}`);
+      const response = await ai.models.generateContent({
+        ...params,
+        model,
+      });
+      console.log(`[Gemini SDK] Success with model: ${model}`);
+      return response;
+    } catch (err: any) {
+      console.warn(`[Gemini SDK] Model ${model} failed:`, err.message || err);
+      lastError = err;
+      // Continue to next model in the list
+    }
+  }
+
+  throw lastError || new Error('All models in fallback chain failed');
+}
+
 const DB_PATH = path.join(process.cwd(), 'src', 'db.json');
 
 // Helper to load db
@@ -277,7 +305,7 @@ ATURAN EKSTRAKSI:
 6. unit: satuan barang. Contoh: 'pak', 'kardus', 'kg', 'renteng', 'pcs', 'bungkus'. Default ke 'pcs' jika tidak ada.
 7. category: kategori barang. Harus merupakan satu dari string ini: 'Sembako', 'Minyak', 'Beras', 'Minuman', 'Camilan', 'Bumbu', 'Lainnya'. Cocokkan beras dengan 'Beras', minyak dengan 'Minyak', sabun/deterjen/perlengkapan mandi dengan 'Sembako', mie/rokok/snack dengan 'Camilan', teh/kopi/air botol dengan 'Minuman'.`;
 
-    const response = await ai.models.generateContent({
+    const response = await generateWithFallback({
       model: 'gemini-3.5-flash',
       contents: prompt,
       config: {
@@ -335,7 +363,7 @@ ATURAN EKSTRAKSI:
           ]
         }
       }
-    });
+    }, ['gemini-3.1-flash-lite']);
 
     const resultText = response.text || '{}';
     const parsedData = JSON.parse(resultText.trim());
@@ -373,7 +401,7 @@ Tugas Anda:
 
 Kembalikan data terstruktur dalam format JSON.`;
 
-    const response = await ai.models.generateContent({
+    const response = await generateWithFallback({
       model: 'gemini-3.5-flash',
       contents: prompt,
       config: {
@@ -397,7 +425,7 @@ Kembalikan data terstruktur dalam format JSON.`;
           required: ['hargaJualSaran', 'diskonMaksimalSaran', 'catatanAnalisis']
         }
       }
-    });
+    }, ['gemini-3.1-flash-lite']);
 
     const resultText = response.text || '{}';
     const parsedData = JSON.parse(resultText.trim());
@@ -435,7 +463,7 @@ Tugas Anda:
 
 Kembalikan data terstruktur dalam format JSON.`;
 
-    const response = await ai.models.generateContent({
+    const response = await generateWithFallback({
       model: 'gemini-3.5-flash',
       contents: metaPrompt,
       config: {
@@ -455,13 +483,13 @@ Kembalikan data terstruktur dalam format JSON.`;
           required: ['caption', 'imagePrompt']
         }
       }
-    });
+    }, ['gemini-3.1-flash-lite']);
 
     const parsedSocial = JSON.parse(response.text?.trim() || '{}');
 
-    // 2. Generate gambar promo e-commerce menggunakan nano banana series (gemini-2.5-flash-image) secara server-side
-    const imageResponse = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
+    // 2. Generate gambar promo e-commerce menggunakan nano banana series (gemini-3.1-flash-image/gemini-2.5-flash-image) secara server-side
+    const imageResponse = await generateWithFallback({
+      model: 'gemini-3.1-flash-image',
       contents: {
         parts: [
           {
@@ -474,7 +502,7 @@ Kembalikan data terstruktur dalam format JSON.`;
           aspectRatio: "1:1"
         }
       }
-    });
+    }, ['gemini-2.5-flash-image']);
 
     let imageUrl = '';
     if (imageResponse.candidates?.[0]?.content?.parts) {
@@ -574,7 +602,7 @@ Format yang wajib kamu kembalikan adalah JSON yang berisi:
 
 Kembalikan format JSON murni tanpa markdown tambahan.`;
 
-    const response = await ai.models.generateContent({
+    const response = await generateWithFallback({
       model: 'gemini-3.5-flash',
       contents: prompt,
       config: {
@@ -589,7 +617,7 @@ Kembalikan format JSON murni tanpa markdown tambahan.`;
           required: ['text', 'achievement', 'tips'],
         },
       },
-    });
+    }, ['gemini-3.1-flash-lite']);
 
     const resultText = response.text || '{}';
     const parsedReport = JSON.parse(resultText.trim());
@@ -641,11 +669,17 @@ app.post('/api/tts', async (req, res) => {
     if (base64Audio) {
       res.json({ audio: base64Audio });
     } else {
-      res.status(500).json({ error: 'Gagal mensintesis suara dari API Gemini' });
+      res.json({ 
+        error: 'Sintesis suara Google dibatasi atau bermasalah. Menggunakan pengucap lokal browser...', 
+        useBrowserFallback: true 
+      });
     }
   } catch (error: any) {
     console.error('Error during TTS generation:', error);
-    res.status(500).json({ error: error.message });
+    res.json({ 
+      error: 'Kuota TTS AI penuh / error 429. Menggunakan pengucap lokal browser...', 
+      useBrowserFallback: true 
+    });
   }
 });
 
