@@ -55,6 +55,32 @@ async function generateWithFallback(params: {
   throw lastError || new Error('All models in fallback chain failed');
 }
 
+// Helper to call generateImages with automatic Imagen models (e.g., imagen-3.0-fast-generate-001 or imagen-3.0-generate-002)
+async function generateImageWithFallback(prompt: string, fallbackModels: string[] = []): Promise<string | null> {
+  const models = ['imagen-3.0-fast-generate-001', 'imagen-3.0-generate-002', ...fallbackModels];
+  for (const model of models) {
+    try {
+      console.log(`[Imagen SDK] Attempting image generation with model: ${model}`);
+      const imageResponse = await ai.models.generateImages({
+        model,
+        prompt,
+        config: {
+          numberOfImages: 1,
+          outputMimeType: 'image/jpeg',
+          aspectRatio: '1:1',
+        },
+      });
+      if (imageResponse?.generatedImages?.[0]?.image?.imageBytes) {
+        console.log(`[Imagen SDK] Success with model: ${model}`);
+        return `data:image/jpeg;base64,${imageResponse.generatedImages[0].image.imageBytes}`;
+      }
+    } catch (err: any) {
+      console.warn(`[Imagen SDK] Model ${model} failed:`, err.message || err);
+    }
+  }
+  return null;
+}
+
 const DB_PATH = path.join(process.cwd(), 'src', 'db.json');
 
 // Helper to load db
@@ -487,32 +513,10 @@ Kembalikan data terstruktur dalam format JSON.`;
 
     const parsedSocial = JSON.parse(response.text?.trim() || '{}');
 
-    // 2. Generate gambar promo e-commerce menggunakan nano banana series (gemini-3.1-flash-image/gemini-2.5-flash-image) secara server-side
-    const imageResponse = await generateWithFallback({
-      model: 'gemini-3.1-flash-image',
-      contents: {
-        parts: [
-          {
-            text: `High-quality colorful social media advertising square graphic post, 1:1 aspect ratio, ${parsedSocial.imagePrompt || `vibrant creative design showcasing ${itemName} in a cozy indonesian neighborhood grocery shop grocery items, minimalist flat vector art`}`
-          }
-        ]
-      },
-      config: {
-        imageConfig: {
-          aspectRatio: "1:1"
-        }
-      }
-    }, ['gemini-2.5-flash-image']);
-
-    let imageUrl = '';
-    if (imageResponse.candidates?.[0]?.content?.parts) {
-      for (const part of imageResponse.candidates[0].content.parts) {
-        if (part.inlineData) {
-          imageUrl = `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
-          break;
-        }
-      }
-    }
+    // 2. Generate gambar promo e-commerce menggunakan Imagen model (imagen-3.0-fast-generate-001) secara server-side
+    const imagePromptText = `High-quality colorful social media advertising square graphic post, 1:1 aspect ratio, ${parsedSocial.imagePrompt || `vibrant creative design showcasing ${itemName} in a cozy indonesian neighborhood grocery shop grocery items, minimalist flat vector art`}`;
+    
+    let imageUrl = await generateImageWithFallback(imagePromptText);
 
     // Fallback if image generation fails using Picsum
     if (!imageUrl) {
